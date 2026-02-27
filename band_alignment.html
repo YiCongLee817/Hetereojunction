@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>異質接面能帶對齊示意圖</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Georgia', 'Times New Roman', serif; background: #efefed; padding: 16px 20px; }
+  h1 { text-align:center; font-size:1.1rem; font-weight:normal; letter-spacing:.04em; margin-bottom:13px; border-bottom:1.5px solid #ccc; padding-bottom:9px; max-width:1320px; margin-left:auto; margin-right:auto; }
+  .main { max-width:1320px; margin:0 auto; display:flex; flex-direction:column; gap:13px; }
+  .dwrap { background:white; border:1px solid #ddd; border-radius:7px; padding:8px; }
+  canvas { width:100%; display:block; }
+  .params { display:flex; gap:13px; }
+  .panel { background:white; border:1px solid #ddd; border-radius:7px; padding:13px 15px; flex:1; }
+  .panel h2 { font-size:.87rem; font-weight:bold; margin-bottom:9px; padding-bottom:5px; border-bottom:1px solid #eee; }
+  .pa h2 { color:#1a55cc; } .pb h2 { color:#cc4400; } .pr h2 { color:#2a6a2a; }
+  label { display:flex; justify-content:space-between; align-items:center; font-size:.80rem; margin-bottom:6px; color:#333; }
+  input[type=number] { width:88px; border:1px solid #ccc; border-radius:3px; padding:4px 6px; font-size:.80rem; font-family:'Courier New',monospace; text-align:right; background:#fafafa; }
+  input:focus { outline:none; border-color:#4a90d9; background:white; }
+  .note { font-size:.68rem; color:#999; margin-top:5px; padding-top:5px; border-top:1px solid #f0f0f0; line-height:1.5; }
+  button { width:100%; padding:10px; background:#1a1a2e; color:white; border:none; border-radius:4px; cursor:pointer; font-size:.87rem; transition:background .2s; }
+  button:hover { background:#2d2d4e; }
+  .pbtn { flex:0 0 126px; display:flex; flex-direction:column; justify-content:center; }
+  .irow { font-size:.79rem; color:#444; line-height:2.0; }
+  .val { font-family:'Courier New',monospace; color:#1a4a1a; font-weight:bold; }
+  .err { color:#c0392b; font-size:.77rem; display:none; margin-top:6px; }
+</style>
+</head>
+<body>
+<h1>異質接面能帶對齊示意圖 | Heterojunction Band Alignment</h1>
+<div class="main">
+  <div class="dwrap"><canvas id="C" width="1280" height="700"></canvas></div>
+  <div class="params">
+    <div class="panel pa">
+      <h2>材料 A（左側）</h2>
+      <label><span>χ<sub>A</sub> 電子親和力 (eV)</span><input type="number" id="chiA" value="4.07" step="0.01" min="0.1"></label>
+      <label><span>E<sub>g,A</sub> 能隙 (eV)</span>    <input type="number" id="EgA"  value="1.12" step="0.01" min="0.1"></label>
+      <label><span>E<sub>f,A</sub> (eV)</span>          <input type="number" id="EfA"  value="-4.61" step="0.01"></label>
+      <div class="note">E<sub>vac</sub>=0 基準，Ec=−χ，Ev=−χ−Eg</div>
+    </div>
+    <div class="panel pb">
+      <h2>材料 B（右側）</h2>
+      <label><span>χ<sub>B</sub> 電子親和力 (eV)</span><input type="number" id="chiB" value="4.00" step="0.01" min="0.1"></label>
+      <label><span>E<sub>g,B</sub> 能隙 (eV)</span>    <input type="number" id="EgB"  value="1.42" step="0.01" min="0.1"></label>
+      <label><span>E<sub>f,B</sub> (eV)</span>          <input type="number" id="EfB"  value="-4.70" step="0.01"></label>
+      <div class="note">Anderson's Rule: ΔEc = χ<sub>A</sub>−χ<sub>B</sub></div>
+    </div>
+    <div class="panel pr">
+      <h2>計算結果</h2>
+      <div class="irow" id="ibox">—</div>
+      <div class="err" id="err">⚠ 請確認 χ &lt; |Ef| &lt; χ+Eg</div>
+    </div>
+    <div class="panel pbtn"><button onclick="draw()">▶ 繪製 / 更新</button></div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// CANVAS TEXT UTILITIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Measure width of a styled string
+function mw(ctx, s, font) { ctx.font = font; return ctx.measureText(s).width; }
+
+// Draw text cleanly (no anti-aliasing workaround — just sharp integer coords)
+function T(ctx, s, x, y, font, color, align, base) {
+  ctx.font          = font  || '15px Georgia';
+  ctx.fillStyle     = color || '#111';
+  ctx.textAlign     = align || 'left';
+  ctx.textBaseline  = base  || 'middle';
+  ctx.fillText(s, Math.round(x), Math.round(y));
+}
+
+// Render "E" + subscript inline, returns total pixel width
+// parts: array of {text, italic, size} — all drawn left to right, subscript offset applied
+function drawLabel(ctx, parts, x, y, color, align) {
+  // First compute total width for alignment
+  let totalW = 0;
+  const rendered = parts.map((p, i) => {
+    const font = (p.italic ? 'italic ' : '') + p.size + 'px Georgia';
+    const w = mw(ctx, p.text, font);
+    totalW += w;
+    return { ...p, w, font };
+  });
+
+  let startX = x;
+  if (align === 'right')  startX = x - totalW;
+  if (align === 'center') startX = x - totalW / 2;
+
+  let cx = startX;
+  rendered.forEach((p, i) => {
+    const yOff = p.sub ? Math.round(p.size * 0.38) : 0;
+    ctx.font         = p.font;
+    ctx.fillStyle    = color;
+    ctx.textAlign    = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(p.text, Math.round(cx), Math.round(y + yOff));
+    cx += p.w;
+  });
+  return totalW;
+}
+
+// Shorthand label builders
+const SZ_LBL  = 16;   // main label size (Ec1 etc.)
+const SZ_SUB  = 11;   // subscript size
+const SZ_ANN  = 15;   // annotation (φ, χ, Eg, ΔE)
+const SZ_ASUB = 10;   // annotation subscript
+
+function lbl_Ec1(ctx, x, y, color, align) {
+  return drawLabel(ctx, [
+    {text:'E', italic:true,  size:SZ_LBL},
+    {text:'c', italic:false, size:SZ_SUB, sub:true},
+    {text:'1', italic:false, size:SZ_SUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_Ev1(ctx, x, y, color, align) {
+  return drawLabel(ctx, [
+    {text:'E', italic:true,  size:SZ_LBL},
+    {text:'v', italic:false, size:SZ_SUB, sub:true},
+    {text:'1', italic:false, size:SZ_SUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_Ec2(ctx, x, y, color, align) {
+  return drawLabel(ctx, [
+    {text:'E', italic:true,  size:SZ_LBL},
+    {text:'c', italic:false, size:SZ_SUB, sub:true},
+    {text:'2', italic:false, size:SZ_SUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_Ev2(ctx, x, y, color, align) {
+  return drawLabel(ctx, [
+    {text:'E', italic:true,  size:SZ_LBL},
+    {text:'v', italic:false, size:SZ_SUB, sub:true},
+    {text:'2', italic:false, size:SZ_SUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_Ef(ctx, x, y, color, align) {
+  return drawLabel(ctx, [
+    {text:'E', italic:true,  size:SZ_LBL},
+    {text:'f',  italic:false, size:SZ_SUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_Eg1(ctx, x, y, color, align) {
+  return drawLabel(ctx, [
+    {text:'E', italic:true,  size:SZ_ANN},
+    {text:'g', italic:false, size:SZ_ASUB, sub:true},
+    {text:'1', italic:false, size:SZ_ASUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_Eg2(ctx, x, y, color, align) {
+  return drawLabel(ctx, [
+    {text:'E', italic:true,  size:SZ_ANN},
+    {text:'g', italic:false, size:SZ_ASUB, sub:true},
+    {text:'2', italic:false, size:SZ_ASUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_phi(ctx, x, y, sub, color, align) {
+  // φ is not italic in standard notation
+  return drawLabel(ctx, [
+    {text:'\u03c6', italic:false, size:SZ_ANN},
+    {text:'W',      italic:false, size:SZ_ASUB, sub:true},
+    {text:sub,      italic:false, size:SZ_ASUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_chi(ctx, x, y, sub, color, align) {
+  return drawLabel(ctx, [
+    {text:'\u03c7', italic:true,  size:SZ_ANN},
+    {text:sub,      italic:false, size:SZ_ASUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_Vn(ctx, x, y, color, align) {
+  return drawLabel(ctx, [
+    {text:'V', italic:true,  size:SZ_ANN},
+    {text:'n', italic:false, size:SZ_ASUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_Vp(ctx, x, y, color, align) {
+  return drawLabel(ctx, [
+    {text:'V', italic:true,  size:SZ_ANN},
+    {text:'p', italic:false, size:SZ_ASUB, sub:true},
+  ], x, y, color, align);
+}
+function lbl_dEc(ctx, x, y, val, color, align) {
+  return drawLabel(ctx, [
+    {text:'\u0394', italic:false, size:SZ_ANN},
+    {text:'E',      italic:true,  size:SZ_ANN},
+    {text:'c',      italic:false, size:SZ_ASUB, sub:true},
+    {text:' = '+val+' eV', italic:false, size:SZ_ANN-1},
+  ], x, y, color, align);
+}
+function lbl_dEv(ctx, x, y, val, color, align) {
+  return drawLabel(ctx, [
+    {text:'\u0394', italic:false, size:SZ_ANN},
+    {text:'E',      italic:true,  size:SZ_ANN},
+    {text:'v',      italic:false, size:SZ_ASUB, sub:true},
+    {text:' = '+val+' eV', italic:false, size:SZ_ANN-1},
+  ], x, y, color, align);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAWING PRIMITIVES
+// ─────────────────────────────────────────────────────────────────────────────
+
+function vArrow(ctx, x, yTop, yBot, color, lw) {
+  const hs = 8;
+  ctx.strokeStyle = color; ctx.fillStyle = color;
+  ctx.lineWidth = lw || 1.6; ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(Math.round(x), yTop + hs);
+  ctx.lineTo(Math.round(x), yBot - hs);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x-4.5, yTop+hs+1); ctx.lineTo(x, yTop); ctx.lineTo(x+4.5, yTop+hs+1);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x-4.5, yBot-hs-1); ctx.lineTo(x, yBot); ctx.lineTo(x+4.5, yBot-hs-1);
+  ctx.fill();
+  // tick caps
+  ctx.lineWidth = 1; ctx.setLineDash([2,2]);
+  ctx.beginPath(); ctx.moveTo(x-5, yTop); ctx.lineTo(x+5, yTop); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x-5, yBot); ctx.lineTo(x+5, yBot); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function dline(ctx, x0, y0, x1, y1, color, lw) {
+  ctx.strokeStyle = color || '#ccc';
+  ctx.lineWidth   = lw || 0.9;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function bandPath(ctx, x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1, x2, y2, color, isDash, lw) {
+  ctx.strokeStyle = color; ctx.lineWidth = lw || 2.2;
+  ctx.setLineDash(isDash ? [8,5] : []);
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke(); ctx.setLineDash([]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN DRAW
+// ─────────────────────────────────────────────────────────────────────────────
+
+function draw() {
+  const chiA=parseFloat(document.getElementById('chiA').value);
+  const EgA =parseFloat(document.getElementById('EgA').value);
+  const EfA =parseFloat(document.getElementById('EfA').value);
+  const chiB=parseFloat(document.getElementById('chiB').value);
+  const EgB =parseFloat(document.getElementById('EgB').value);
+  const EfB =parseFloat(document.getElementById('EfB').value);
+
+  const EcA=-chiA, EvA=-chiA-EgA;
+  const EcB=-chiB, EvB=-chiB-EgB;
+  const Evac=0;
+
+  const errEl = document.getElementById('err');
+  if(EfA>=EcA||EfA<=EvA||EfB>=EcB||EfB<=EvB){ errEl.style.display='block'; return; }
+  errEl.style.display='none';
+
+  const dEc  = +(chiA-chiB).toFixed(6);
+  const dEv  = +(dEc-EgA+EgB).toFixed(6);
+  const Vbi  = +( (-EfB)-(-EfA) ).toFixed(6);
+
+  document.getElementById('ibox').innerHTML=`
+    E<sub>c,A</sub>=<span class="val">${EcA.toFixed(3)}</span> eV,
+    E<sub>v,A</sub>=<span class="val">${EvA.toFixed(3)}</span> eV<br>
+    E<sub>c,B</sub>=<span class="val">${EcB.toFixed(3)}</span> eV,
+    E<sub>v,B</sub>=<span class="val">${EvB.toFixed(3)}</span> eV<br>
+    ΔE<sub>c</sub>=<span class="val">${dEc.toFixed(3)}</span> eV &nbsp;
+    ΔE<sub>v</sub>=<span class="val">${Math.abs(dEv).toFixed(3)}</span> eV<br>
+    V<sub>bi</sub>=<span class="val">${Math.abs(Vbi).toFixed(3)}</span> eV
+  `;
+
+  const cv  = document.getElementById('C');
+  const ctx = cv.getContext('2d');
+  const W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='white'; ctx.fillRect(0,0,W,H);
+
+  // ── Colors ──
+  const CA='#1a55cc', CB='#cc4400', CEVAC='#888', CEF='#333', CANN='#222';
+
+  // ── Layout ──
+  // mL / mR generous: left has 3 arrow columns + labels, right has 2 columns
+  const mL=160, mR=155, mT=90, mB=52;
+  const pW=W-mL-mR, pH=H-mT-mB;
+  const jX=mL+pW*0.48, bendW=pW*0.10;
+  const xLA=mL+6, xRA=mL+pW-6;
+  const xBL=jX-bendW, xBR=jX+bendW;
+
+  // ── Align Ef ──
+  const shift=EfA-EfB;
+  const EcBs=+(EcB+shift).toFixed(6), EvBs=+(EvB+shift).toFixed(6);
+  const EvacBs=+(Evac+shift).toFixed(6);
+
+  const allE=[Evac,EcA,EvA,EfA,EvacBs,EcBs,EvBs];
+  const eMin=Math.min(...allE)-0.5, eMax=Math.max(...allE)+0.5;
+  const eRng=eMax-eMin;
+  function ey(e){ return Math.round(mT+pH*(1-(e-eMin)/eRng)); }
+
+  // ── Junction verticals ──
+  const jxL=jX-pW*0.30, jxR=jX+pW*0.30;
+  [jxL,jX,jxR].forEach(x=>{
+    ctx.strokeStyle='#bbb'; ctx.lineWidth=1.1; ctx.setLineDash([5,4]);
+    ctx.beginPath(); ctx.moveTo(Math.round(x),mT-22); ctx.lineTo(Math.round(x),mT+pH+8); ctx.stroke();
+    ctx.setLineDash([]);
+  });
+  [['−d₁',jxL],['x = 0',jX],['d₂',jxR]].forEach(([s,x])=>{
+    T(ctx,s,x,mT+pH+20,'13px Georgia','#555','center','top');
+  });
+
+  // ── "Local Vacuum Level" + pointer ──
+  const lvlLabelX = jX + pW*0.06, lvlLabelY = mT-36;
+  T(ctx,'Local Vacuum Level', lvlLabelX, lvlLabelY, '13.5px Georgia','#444','center','bottom');
+  const arX=jX+bendW*0.5, arY=ey((Evac+EvacBs)*0.5)+2;
+  ctx.strokeStyle='#888'; ctx.lineWidth=1.3;
+  ctx.beginPath(); ctx.moveTo(lvlLabelX,lvlLabelY);
+  ctx.quadraticCurveTo(arX+20,arY-24,arX+4,arY); ctx.stroke();
+  ctx.fillStyle='#888';
+  ctx.beginPath(); ctx.moveTo(arX-1,arY-9); ctx.lineTo(arX+4,arY+1); ctx.lineTo(arX+9,arY-7); ctx.fill();
+
+  // ── Bands (discontinuous at interface) ──
+  const bendA = Vbi*0.55, bendB = Vbi*0.55;
+
+  // A-side: flat from xLA to xBL, bends toward junction
+  function drawBandA(e, color, isDash) {
+    const yF=ey(e), yJ=ey(e+bendA);
+    bandPath(ctx, xLA,yF, xBL,yF, jX-4,yJ, jX-2,yJ, jX-2,yJ, color,isDash);
+  }
+  // B-side: bends away from junction, flat to xRA
+  function drawBandB(eS, color, isDash) {
+    const yF=ey(eS), yJ=ey(eS-bendB);
+    bandPath(ctx, jX+2,yJ, jX+2,yJ, xBR,yF, xRA,yF, xRA,yF, color,isDash);
+  }
+
+  drawBandA(Evac, CEVAC, true);
+  drawBandB(EvacBs, CEVAC, true);
+  drawBandA(EcA, CA, false);
+  drawBandA(EvA, CA, false);
+  drawBandB(EcBs, CB, false);
+  drawBandB(EvBs, CB, false);
+
+  // Ef flat black dashed
+  ctx.strokeStyle=CEF; ctx.lineWidth=2.0; ctx.setLineDash([10,5]);
+  ctx.beginPath(); ctx.moveTo(xLA,ey(EfA)); ctx.lineTo(xRA,ey(EfA)); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // BAND-END LABELS — outside plot, connected by dashed lines
+  // Left side: labels end 8px before xLA, dashed line from label to band end
+  // Right side: labels start 8px after xRA
+  // ─────────────────────────────────────────────────────────────────────
+  const GAP = 10; // gap between label edge and band
+
+  // EC1 — align right edge at xLA-GAP
+  const yEc1 = ey(EcA);
+  const wEc1 = lbl_Ec1(ctx, xLA-GAP, yEc1+5, CA, 'right');
+  dline(ctx, xLA-GAP+2, yEc1, xLA, yEc1, '#88aadd');
+
+  // EV1
+  const yEv1 = ey(EvA);
+  lbl_Ev1(ctx, xLA-GAP, yEv1+5, CA, 'right');
+  dline(ctx, xLA-GAP+2, yEv1, xLA, yEv1, '#88aadd');
+
+  // Ef label left side
+  const yEfL = ey(EfA);
+  lbl_Ef(ctx, xLA-GAP, yEfL+5, CEF, 'right');
+
+  // EC2 right
+  const yEc2 = ey(EcBs);
+  lbl_Ec2(ctx, xRA+GAP, yEc2+5, CB, 'left');
+  dline(ctx, xRA, yEc2, xRA+GAP-2, yEc2, '#e8b080');
+
+  // EV2 right
+  const yEv2 = ey(EvBs);
+  lbl_Ev2(ctx, xRA+GAP, yEv2+5, CB, 'left');
+  dline(ctx, xRA, yEv2, xRA+GAP-2, yEv2, '#e8b080');
+
+  // ─────────────────────────────────────────────────────────────────────
+  // LEFT-MARGIN ANNOTATION ARROWS (3 columns)
+  // Col positions chosen so labels DON'T overlap each other or bands
+  // Each column: arrow at fixed x, label in clear space to its left
+  // ─────────────────────────────────────────────────────────────────────
+  const xChi1 = mL-28;   // χ1: closest to plot
+  const xPhi1 = mL-75;   // φW1: outer (moved closer since Vn gone)
+
+  // χ1: Evac(0) → EcA  [arrow + label LEFT of arrow]
+  vArrow(ctx, xChi1, ey(Evac), ey(EcA), CANN);
+  lbl_chi(ctx, xChi1-8, (ey(Evac)+ey(EcA))/2+4, '1', CANN, 'right');
+  // horizontal connector from arrow top/bottom to band left edges
+  dline(ctx, xChi1+6, ey(Evac), xLA, ey(Evac), '#ccc');
+  dline(ctx, xChi1+6, ey(EcA),  xLA, ey(EcA),  '#ccc');
+
+  // Vn removed
+
+  // φW1: Evac(0) → EfA
+  vArrow(ctx, xPhi1, ey(Evac), ey(EfA), CANN);
+  lbl_phi(ctx, xPhi1-8, (ey(Evac)+ey(EfA))/2+4, '1', CANN, 'right');
+  dline(ctx, xPhi1+6, ey(Evac), xLA, ey(Evac), '#ccc');
+  dline(ctx, xPhi1+6, ey(EfA),  xLA, ey(EfA),  '#ccc');
+
+  // ─────────────────────────────────────────────────────────────────────
+  // RIGHT-MARGIN ANNOTATION ARROWS (2 columns)
+  // ─────────────────────────────────────────────────────────────────────
+  const xChi2 = xRA+32;   // χ2: closer
+  const xPhi2 = xRA+82;   // φW2: outer
+
+  // χ2: EvacBs → EcBs
+  vArrow(ctx, xChi2, ey(EvacBs), ey(EcBs), CANN);
+  lbl_chi(ctx, xChi2+8, (ey(EvacBs)+ey(EcBs))/2+4, '2', CANN, 'left');
+  dline(ctx, xRA, ey(EvacBs), xChi2-6, ey(EvacBs), '#ccc');
+  dline(ctx, xRA, ey(EcBs),   xChi2-6, ey(EcBs),   '#ccc');
+
+  // φW2: EvacBs → EfA
+  vArrow(ctx, xPhi2, ey(EvacBs), ey(EfA), CANN);
+  lbl_phi(ctx, xPhi2+8, (ey(EvacBs)+ey(EfA))/2+4, '2', CANN, 'left');
+  dline(ctx, xRA, ey(EvacBs), xPhi2-6, ey(EvacBs), '#ccc');
+  dline(ctx, xRA, ey(EfA),    xPhi2-6, ey(EfA),    '#ccc');
+
+  // ─────────────────────────────────────────────────────────────────────
+  // INNER ANNOTATIONS
+  // Eg1 / Eg2 / Vp — placed in quiet zones, label offset perpendicular to arrow
+  // ─────────────────────────────────────────────────────────────────────
+
+  // Eg1: at x = 15% of plot width (well inside A, clear of left margin arrows)
+  const xEg1 = mL + pW*0.14;
+  vArrow(ctx, xEg1, ey(EcA), ey(EvA), CA);
+  // Label to the RIGHT of arrow (open space in A region)
+  lbl_Eg1(ctx, xEg1+10, (ey(EcA)+ey(EvA))/2+4, CA, 'left');
+
+  // Eg2: at x = 78% (inside B, clear of right margin arrows)
+  const xEg2 = mL + pW*0.78;
+  vArrow(ctx, xEg2, ey(EcBs), ey(EvBs), CB);
+  // Label to the LEFT
+  lbl_Eg2(ctx, xEg2-10, (ey(EcBs)+ey(EvBs))/2+4, CB, 'right');
+
+  // Vp removed
+
+  // ─────────────────────────────────────────────────────────────────────
+  // ΔEc and ΔEv — drawn RIGHT AT the junction discontinuity
+  // The arrow x = jX (the interface itself), y-span = exact gap size
+  // The A-side band ends at jX-2, B-side starts at jX+2
+  // We draw the arrow straddling jX, with length = actual pixel gap
+  // ─────────────────────────────────────────────────────────────────────
+  const dEcAbs = Math.abs(dEc), dEvAbs = Math.abs(dEv);
+
+  // ΔEc: at junction, between EcA-side tip and EcBs-side tip
+  // A-side Ec at junction = ey(EcA + bendA), B-side = ey(EcBs - bendB)
+  if(dEcAbs > 0.001) {
+    const yEcA_junc = ey(EcA  + bendA);   // A-side Ec at x=jX-2
+    const yEcB_junc = ey(EcBs - bendB);   // B-side Ec at x=jX+2
+    const yTop = Math.min(yEcA_junc, yEcB_junc);
+    const yBot = Math.max(yEcA_junc, yEcB_junc);
+    const xDec = jX + 18;                 // just right of the gap
+    vArrow(ctx, xDec, yTop, yBot, CA, 1.8);
+    // label to the right
+    lbl_dEc(ctx, xDec+10, (yTop+yBot)/2+4, dEcAbs.toFixed(3), CA, 'left');
+  }
+
+  // ΔEv: at junction, between EvA-side tip and EvBs-side tip
+  if(dEvAbs > 0.001) {
+    const yEvA_junc = ey(EvA  + bendA);   // A-side Ev at junction
+    const yEvB_junc = ey(EvBs - bendB);   // B-side Ev at junction
+    const yTop = Math.min(yEvA_junc, yEvB_junc);
+    const yBot = Math.max(yEvA_junc, yEvB_junc);
+    const xDev = jX - 18;                 // just left of the gap
+    vArrow(ctx, xDev, yTop, yBot, CB, 1.8);
+    // label to the left
+    lbl_dEv(ctx, xDev-10, (yTop+yBot)/2+4, dEvAbs.toFixed(3), CB, 'right');
+  }
+
+  // (c) label
+  T(ctx,'(c)', mL-22, mT+pH+30, '13px Georgia','#666','left','top');
+}
+
+window.onload = draw;
+</script>
+</body>
+</html>
